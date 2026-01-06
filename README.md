@@ -1,50 +1,68 @@
-# Welcome to your Expo app 👋
+<img src="https://socialify.git.ci/mmelokuhlemaphisa/React-Native-Audio-Recorder/image?language=1&owner=1&name=1&stargazers=1&theme=Light" alt="React-Native-Audio-Recorder" width="640" height="320" />
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
-## Get started
+# React Native Audio Recorder 🎙️
+
+A small voice journal app (Task 3, Lesson 5) built with Expo and React Native. Record, save, play, rename, delete, and search voice notes. Designed for easy testing 
+
+---
+
+## 🚀 Features
+
+- Record audio (start/pause/resume/stop) and save locally 
+- List of voice notes with date & duration 
+- Playback with play/pause, seek (scrub), skip ±10s, speed & repeat 
+- Rename and delete recordings (delete shows confirmation) 
+- Search notes by name 
+- Persistent storage: saves metadata to `notes.json` and files under app document directory 
+
+---
+
+## 💻 Run (development)
 
 1. Install dependencies
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+2. Start Expo
 
-## Learn more
+```bash
+npm  start
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+3. Open on device/emulator (Expo Go or Simulator)
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
 
-## Join the community
 
-Join our community of developers creating universal apps.
+---
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## ✅ Quick test checklist
+
+- Record a short note in the main screen (allow microphone access)
+- Save and verify the note appears in the list with a duration
+- Play the note (list or detail) and test play/pause
+- Scrub quickly back and forth — the progress bar and audio should follow
+- Rename a note and confirm it updates in the list
+- Delete a note (confirm prompt) and ensure it is removed
+- Restart the app to confirm persistence (notes remain)
+
+---
+
+## 📁 Important files
+
+- `app/index.tsx` — Recording UI & save logic
+- `app/list.tsx` — Notes list, playback controls and scrub UI
+- `app/note/audioDetails.tsx` — Per-note detail (playback, rename, delete, speed)
+
+---
+
+
+## ⚠️ Known quirks
+
+- Expo Go on some Android devices may have differences in temporary file handling; if a recorded file is missing, check the app logs.
+- If playback fails, try restarting the app and verifying file existence in the app document directory.
+
+---
+
