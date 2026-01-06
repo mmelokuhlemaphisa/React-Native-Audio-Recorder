@@ -1,6 +1,6 @@
 import { Audio } from "expo-av";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   FlatList,
   Platform,
@@ -28,6 +28,8 @@ export default function ListScreen() {
   const [search, setSearch] = useState("");
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [progress, setProgress] = useState({ position: 0, duration: 1 });
+  const progressWidthRef = useRef(0); // 👈 store layout width safely
 
   /* ---------------- FILE SYSTEM ---------------- */
   const getFileSystem = async () => {
@@ -52,7 +54,6 @@ export default function ListScreen() {
     }
   };
 
-  // 🔥 reload when coming back from detail screen
   useFocusEffect(
     useCallback(() => {
       loadNotes();
@@ -86,6 +87,12 @@ export default function ListScreen() {
       playback.setOnPlaybackStatusUpdate((status) => {
         if (!status.isLoaded) return;
 
+        setProgress((prev) => ({
+          ...prev,
+          position: status.positionMillis || 0,
+          duration: status.durationMillis || 1,
+        }));
+
         if (status.didJustFinish) {
           setPlayingId(null);
           playback.unloadAsync().catch(() => {});
@@ -100,8 +107,20 @@ export default function ListScreen() {
     }
   };
 
+  /* ---------------- SEEK ---------------- */
+  const seek = async (x: number) => {
+    if (!sound || progressWidthRef.current === 0) return;
+    const percent = x / progressWidthRef.current;
+    const position = percent * progress.duration;
+    await sound.setPositionAsync(position);
+  };
+
   /* ---------------- RENDER ITEM ---------------- */
   const renderItem = ({ item }: { item: VoiceNote }) => {
+    const isPlaying = playingId === item.id;
+    const percent =
+      progress.duration > 0 ? (progress.position / progress.duration) * 100 : 0;
+
     return (
       <TouchableOpacity
         style={styles.card}
@@ -112,19 +131,33 @@ export default function ListScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{item.name}</Text>
             <Text style={styles.meta}>{item.date}</Text>
+
+            {/* 🎚 PROGRESS BAR (ONLY WHEN PLAYING) */}
+            {isPlaying && (
+              <View
+                style={styles.progressBar}
+                onLayout={(e) => {
+                  progressWidthRef.current = e.nativeEvent.layout.width;
+                }}
+                onStartShouldSetResponder={() => true}
+                onResponderMove={(e) => seek(e.nativeEvent.locationX)}
+                onResponderGrant={(e) => seek(e.nativeEvent.locationX)}
+              >
+                <View style={[styles.progressFill, { width: `${percent}%` }]} />
+                <View style={[styles.scrubber, { left: `${percent}%` }]} />
+              </View>
+            )}
           </View>
 
           {/* ▶ PLAY BUTTON */}
           <TouchableOpacity
             onPress={(e) => {
-              e.stopPropagation(); // ❗ prevent navigation
+              e.stopPropagation();
               togglePlay(item);
             }}
             style={styles.playButton}
           >
-            <Text style={styles.playButtonText}>
-              {playingId === item.id ? "⏸" : "▶"}
-            </Text>
+            <Text style={styles.playButtonText}>{isPlaying ? "⏸" : "▶"}</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -180,7 +213,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   name: { fontSize: 16, fontWeight: "700" },
-  meta: { fontSize: 12, color: "#666", marginTop: 2 },
+  meta: { fontSize: 12, color: "#666", marginBottom: 6 },
   playButton: {
     backgroundColor: "#4f46e5",
     width: 44,
@@ -191,4 +224,29 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   playButtonText: { color: "#fff", fontSize: 20 },
+
+  /* 🎚 Progress Bar */
+  progressBar: {
+    height: 6,
+    backgroundColor: "#e5e7eb",
+    borderRadius: 6,
+    marginTop: 6,
+    position: "relative",
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: "#4f46e5",
+    borderRadius: 6,
+  },
+  scrubber: {
+    position: "absolute",
+    top: -5,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    borderColor: "#4f46e5",
+    transform: [{ translateX: -7 }],
+  },
 });

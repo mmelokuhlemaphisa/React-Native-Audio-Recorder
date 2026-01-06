@@ -4,6 +4,8 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
   Alert,
+  Modal,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -33,6 +35,7 @@ export default function NoteDetail() {
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   /* ---------------- FILE SYSTEM ---------------- */
   const getFileSystem = async () => {
@@ -43,28 +46,23 @@ export default function NoteDetail() {
   /* ---------------- LOAD NOTE ---------------- */
   const loadNote = async () => {
     if (!id) return;
-
     try {
       const FileSystem = await getFileSystem();
       const file = FileSystem.documentDirectory + "notes.json";
-
       const info = await FileSystem.getInfoAsync(file);
       if (!info.exists) {
         Alert.alert("Error", "Notes file not found");
         router.back();
         return;
       }
-
       const data = await FileSystem.readAsStringAsync(file);
       const list: VoiceNote[] = JSON.parse(data);
-
       const found = list.find((n) => n.id === id);
       if (!found) {
         Alert.alert("Error", "Voice note not found");
         router.back();
         return;
       }
-
       setNote(found);
       setName(found.name);
     } catch (err) {
@@ -79,17 +77,13 @@ export default function NoteDetail() {
   /* ---------------- STAR ---------------- */
   const toggleStar = async () => {
     if (!note) return;
-
     const FileSystem = await getFileSystem();
     const file = FileSystem.documentDirectory + "notes.json";
-
     const data = await FileSystem.readAsStringAsync(file);
     const list: VoiceNote[] = JSON.parse(data);
-
     const updated = list.map((n) =>
       n.id === note.id ? { ...n, starred: !n.starred } : n
     );
-
     await FileSystem.writeAsStringAsync(file, JSON.stringify(updated));
     setNote({ ...note, starred: !note.starred });
   };
@@ -97,7 +91,6 @@ export default function NoteDetail() {
   /* ---------------- PLAY / PAUSE ---------------- */
   const togglePlay = async () => {
     if (!note) return;
-
     try {
       if (sound) {
         const status = await sound.getStatusAsync();
@@ -109,25 +102,18 @@ export default function NoteDetail() {
         await sound.unloadAsync();
         setSound(null);
       }
-
       const { sound: newSound } = await Audio.Sound.createAsync(
         { uri: note.uri },
         { rate: speed, shouldCorrectPitch: true, isLooping: repeat }
       );
-
       setSound(newSound);
       setPlaying(true);
       await newSound.playAsync();
-
       newSound.setOnPlaybackStatusUpdate((status) => {
         if (!status.isLoaded) return;
-
         setPosition(status.positionMillis ?? 0);
         setDuration(status.durationMillis ?? note.duration);
-
-        if (status.didJustFinish && !repeat) {
-          setPlaying(false);
-        }
+        if (status.didJustFinish && !repeat) setPlaying(false);
       });
     } catch (err) {
       Alert.alert("Playback Error", "Unable to play this recording");
@@ -135,14 +121,12 @@ export default function NoteDetail() {
     }
   };
 
-  /* ---------------- UPDATE SPEED / LOOP ---------------- */
   useEffect(() => {
     if (!sound) return;
     sound.setRateAsync(speed, true);
     sound.setIsLoopingAsync(repeat);
   }, [speed, repeat]);
 
-  /* ---------------- CLEANUP ---------------- */
   useEffect(() => {
     return () => {
       sound?.unloadAsync();
@@ -152,55 +136,55 @@ export default function NoteDetail() {
   /* ---------------- DELETE ---------------- */
   const deleteNote = async () => {
     if (!note) return;
-
     const FileSystem = await getFileSystem();
     const file = FileSystem.documentDirectory + "notes.json";
-
     const data = await FileSystem.readAsStringAsync(file);
     const list: VoiceNote[] = JSON.parse(data);
-
     const filtered = list.filter((n) => n.id !== note.id);
     await FileSystem.writeAsStringAsync(file, JSON.stringify(filtered));
     await FileSystem.deleteAsync(note.uri, { idempotent: true });
-
     router.replace("/list");
   };
 
   /* ---------------- RENAME ---------------- */
   const renameNote = async () => {
     if (!note || !name.trim()) return;
-
     const FileSystem = await getFileSystem();
     const file = FileSystem.documentDirectory + "notes.json";
-
     const data = await FileSystem.readAsStringAsync(file);
     const list: VoiceNote[] = JSON.parse(data);
-
     const updated = list.map((n) => (n.id === note.id ? { ...n, name } : n));
-
     await FileSystem.writeAsStringAsync(file, JSON.stringify(updated));
     setNote({ ...note, name });
     setEditing(false);
+    setSettingsOpen(false);
   };
 
-  if (!note) {
+  /* ---------------- SHARE ---------------- */
+  const shareNote = async () => {
+    if (!note) return;
+    try {
+      await Share.share({ message: `Voice Note: ${note.name}`, url: note.uri });
+    } catch (err) {
+      console.warn("Share error:", err);
+    }
+  };
+
+  if (!note)
     return (
       <View style={styles.container}>
         <Text>Loading...</Text>
       </View>
     );
-  }
 
-  /* ---------------- UI ---------------- */
   return (
     <View style={styles.container}>
+      {/* Header */}
       <View style={styles.headerRow}>
         <TouchableOpacity onPress={() => router.back()}>
           <Text style={styles.link}>◀ Back</Text>
         </TouchableOpacity>
-
         <View style={{ flex: 1 }} />
-
         <TouchableOpacity onPress={toggleStar}>
           <Ionicons
             name={note.starred ? "star" : "star-outline"}
@@ -208,22 +192,148 @@ export default function NoteDetail() {
             color={note.starred ? "#f59e0b" : "#999"}
           />
         </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setSettingsOpen(true)}
+          style={{ marginLeft: 12 }}
+        >
+          <Ionicons name="ellipsis-vertical" size={22} color="#333" />
+        </TouchableOpacity>
       </View>
 
-      {editing ? (
-        <>
-          <TextInput value={name} onChangeText={setName} style={styles.input} />
-          <TouchableOpacity onPress={renameNote} style={styles.btn}>
-            <Text>Save</Text>
-          </TouchableOpacity>
-        </>
-      ) : (
-        <>
-          <Text style={styles.title}>{note.name}</Text>
-          <Text style={styles.meta}>{note.date}</Text>
+      {/* Title */}
+      <Text style={styles.title}>{note.name}</Text>
+      <Text style={styles.meta}>{note.date}</Text>
 
-          <View style={styles.controlsRow}>
-            <Text>Speed</Text>
+      {/* Playback Controls */}
+      <View style={styles.waveformContainer}>
+        <View style={styles.waveform}>
+          <View
+            style={[
+              styles.playhead,
+              { left: `${(position / duration) * 100}%` },
+            ]}
+          />
+        </View>
+        <View style={styles.waveformLabels}>
+          <Text>{Math.floor(position / 1000)}s</Text>
+          <Text>{Math.floor(duration / 1000)}s</Text>
+        </View>
+      </View>
+
+      <View style={styles.controlsRow}>
+        {/* Back 10s */}
+        <TouchableOpacity
+          onPress={() => setPosition(Math.max(0, position - 10000))}
+          style={styles.skipBtn}
+        >
+          <Ionicons name="play-back" size={28} color="#111" />
+          <Text style={styles.skipLabel}>10s</Text>
+        </TouchableOpacity>
+
+        {/* Back 3s */}
+        <TouchableOpacity
+          onPress={() => setPosition(Math.max(0, position - 3000))}
+          style={styles.skipBtn}
+        >
+          <Ionicons name="play-back" size={28} color="#111" />
+          <Text style={styles.skipLabel}>3s</Text>
+        </TouchableOpacity>
+
+        {/* Play / Pause */}
+        <TouchableOpacity
+          style={[styles.playBtn, playing && styles.playing]}
+          onPress={togglePlay}
+        >
+          <Ionicons
+            name={playing ? "pause" : "play"}
+            size={32}
+            color={playing ? "#fff" : "#4f46e5"}
+          />
+        </TouchableOpacity>
+
+        {/* Forward 3s */}
+        <TouchableOpacity
+          onPress={() => setPosition(Math.min(duration, position + 3000))}
+          style={styles.skipBtn}
+        >
+          <Ionicons name="play-forward" size={28} color="#111" />
+          <Text style={styles.skipLabel}>3s</Text>
+        </TouchableOpacity>
+
+        {/* Forward 10s */}
+        <TouchableOpacity
+          onPress={() => setPosition(Math.min(duration, position + 10000))}
+          style={styles.skipBtn}
+        >
+          <Ionicons name="play-forward" size={28} color="#111" />
+          <Text style={styles.skipLabel}>10s</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Settings Modal */}
+      <Modal
+        visible={settingsOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSettingsOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Settings</Text>
+
+            {editing ? (
+              <>
+                <TextInput
+                  value={name}
+                  onChangeText={setName}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: "#ccc",
+                    padding: 8,
+                    borderRadius: 8,
+                    marginBottom: 12,
+                  }}
+                  placeholder="New name"
+                />
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: "#4f46e5" }]}
+                  onPress={renameNote}
+                >
+                  <Text style={{ color: "#fff" }}>Save</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modalBtn,
+                    { backgroundColor: "#ddd", marginTop: 8 },
+                  ]}
+                  onPress={() => setEditing(false)}
+                >
+                  <Text>Cancel</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity
+                style={styles.settingItem}
+                onPress={() => setEditing(true)}
+              >
+                <Text>Rename</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity style={styles.settingItem} onPress={deleteNote}>
+              <Text>Delete</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.settingItem} onPress={shareNote}>
+              <Text>Share</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.settingItem}
+              onPress={() => setRepeat(!repeat)}
+            >
+              <Text>Repeat: {repeat ? "On" : "Off"}</Text>
+            </TouchableOpacity>
+
+            <Text style={{ marginTop: 12 }}>Playback Speed</Text>
             <View style={styles.speedRow}>
               {[0.5, 1, 1.5, 2].map((s) => (
                 <TouchableOpacity
@@ -235,81 +345,29 @@ export default function NoteDetail() {
                 </TouchableOpacity>
               ))}
             </View>
-          </View>
-
-          <View style={styles.controlsRow}>
-            <Text>Repeat</Text>
-            <TouchableOpacity
-              style={[styles.smallBtn, repeat && styles.smallBtnActive]}
-              onPress={() => setRepeat(!repeat)}
-            >
-              <Text style={{ color: repeat ? "#fff" : "#111" }}>
-                {repeat ? "On" : "Off"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={{ alignItems: "center", marginTop: 20 }}>
-            <TouchableOpacity
-              style={[styles.playBtn, playing && styles.playing]}
-              onPress={togglePlay}
-            >
-              <Ionicons
-                name={playing ? "pause" : "play"}
-                size={26}
-                color={playing ? "#fff" : "#4f46e5"}
-              />
-            </TouchableOpacity>
-
-            <Text style={{ marginTop: 8 }}>
-              {Math.floor(position / 1000)}s / {Math.floor(duration / 1000)}s
-            </Text>
-          </View>
-
-          <View style={styles.actionsRow}>
-            <TouchableOpacity
-              style={styles.btn}
-              onPress={() => setEditing(true)}
-            >
-              <Text>Rename</Text>
-            </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.btn, styles.danger]}
-              onPress={() =>
-                Alert.alert("Delete", "Delete this note?", [
-                  { text: "Cancel" },
-                  { text: "Delete", style: "destructive", onPress: deleteNote },
-                ])
-              }
+              style={[
+                styles.modalBtn,
+                { backgroundColor: "#ddd", marginTop: 12 },
+              ]}
+              onPress={() => setSettingsOpen(false)}
             >
-              <Text>Delete</Text>
+              <Text>Close</Text>
             </TouchableOpacity>
           </View>
-        </>
-      )}
+        </View>
+      </Modal>
     </View>
   );
 }
 
-/* ---------------- STYLES ---------------- */
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: "#f4f6fb" },
   headerRow: { flexDirection: "row", alignItems: "center" },
   link: { color: "#4f46e5" },
   title: { fontSize: 20, fontWeight: "700", marginTop: 12 },
   meta: { color: "#666", marginTop: 4 },
-  controlsRow: { marginTop: 18 },
-  speedRow: { flexDirection: "row", gap: 8, marginTop: 8 },
-  speedBtn: { padding: 8, borderRadius: 8, backgroundColor: "#fff" },
-  speedActive: { backgroundColor: "#4f46e5" },
-  smallBtn: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: "#eee",
-    marginLeft: 8,
-  },
-  smallBtnActive: { backgroundColor: "#4f46e5" },
   playBtn: {
     width: 64,
     height: 64,
@@ -319,13 +377,53 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   playing: { backgroundColor: "#4f46e5" },
-  actionsRow: { flexDirection: "row", gap: 12, marginTop: 20 },
-  btn: { backgroundColor: "#fff", padding: 10, borderRadius: 8 },
-  danger: { backgroundColor: "#fee2e2" },
-  input: {
-    backgroundColor: "#fff",
-    padding: 8,
-    borderRadius: 8,
-    marginTop: 12,
+  waveformContainer: { marginTop: 30 },
+  waveform: {
+    height: 60,
+    backgroundColor: "#ddd",
+    borderRadius: 6,
+    position: "relative",
   },
+  playhead: {
+    position: "absolute",
+    width: 2,
+    height: "100%",
+    backgroundColor: "#f00",
+  },
+  waveformLabels: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 4,
+  },
+  controlsRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+    marginTop: 20,
+  },
+  skipBtn: { alignItems: "center" },
+  skipLabel: { fontSize: 10, color: "#666", textAlign: "center", marginTop: 2 },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modal: {
+    width: "85%",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 20,
+  },
+  modalTitle: { fontSize: 18, fontWeight: "700", marginBottom: 12 },
+  modalBtn: {
+    backgroundColor: "#fff",
+    padding: 10,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  settingItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: "#eee" },
+  speedRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  speedBtn: { padding: 8, borderRadius: 8, backgroundColor: "#fff" },
+  speedActive: { backgroundColor: "#4f46e5" },
 });

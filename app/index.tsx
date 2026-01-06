@@ -143,7 +143,18 @@ export default function App() {
       const FileSystem = await getFileSystem();
       if (!FileSystem) return;
 
+      const notesFile = FileSystem.documentDirectory + "notes.json";
+      let list: any[] = [];
+
+      const info = await FileSystem.getInfoAsync(notesFile);
+      if (info.exists) {
+        list = JSON.parse(await FileSystem.readAsStringAsync(notesFile));
+      }
+
+      // ✅ RECORDING NUMBER (1, 2, 3...)
+      const recordingNumber = list.length + 1;
       const id = Date.now().toString();
+
       const dir = FileSystem.documentDirectory + "recordings/";
       await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 
@@ -153,24 +164,16 @@ export default function App() {
       const note = {
         id,
         uri: newPath,
-        name: `Recording ${id}`,
+        name: `Recording ${recordingNumber}`,
         date: new Date().toLocaleString(),
         duration: status.durationMillis || 0,
       };
-
-      const notesFile = FileSystem.documentDirectory + "notes.json";
-      let list = [];
-
-      const info = await FileSystem.getInfoAsync(notesFile);
-      if (info.exists) {
-        list = JSON.parse(await FileSystem.readAsStringAsync(notesFile));
-      }
 
       list.unshift(note);
       await FileSystem.writeAsStringAsync(notesFile, JSON.stringify(list));
 
       router.push("/list");
-    } catch (e) {
+    } catch {
       Alert.alert("Error", "Failed to save recording");
     } finally {
       setSaving(false);
@@ -184,7 +187,7 @@ export default function App() {
   /* ---------------- UI ---------------- */
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>🎙 Voice Journal</Text>
+      <Text style={styles.title}>🎙 Voice Recorder</Text>
 
       {recording && (
         <View style={styles.recordBanner}>
@@ -243,61 +246,107 @@ export default function App() {
     </View>
   );
 }
-
 /* ---------------- STYLES ---------------- */
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: "#f4f6fb" },
-  title: { fontSize: 26, fontWeight: "bold", textAlign: "center" },
+  container: {
+    flex: 1,
+    padding: 20,
+    backgroundColor: "#f4f6fb",
+    justifyContent: "space-between",
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: "bold",
+    textAlign: "center",
+    marginTop: 20,
+    color: "#111",
+  },
 
   recordBanner: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#fee2e2",
-    padding: 8,
-    borderRadius: 10,
-    marginVertical: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginVertical: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
   },
   dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 10,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: "#ef4444",
-    marginRight: 8,
+    marginRight: 10,
   },
-  recordText: { color: "#b91c1c", fontWeight: "700" },
+  recordText: {
+    color: "#b91c1c",
+    fontWeight: "700",
+    fontSize: 16,
+  },
 
-  center: { alignItems: "center", marginTop: 40 },
+  center: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 40,
+  },
 
   recordBtn: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 90,
+    height: 90,
+    borderRadius: 45,
     backgroundColor: "#4f46e5",
     justifyContent: "center",
     alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 6,
   },
-  stopBtn: { backgroundColor: "#ef4444" },
+  stopBtn: {
+    backgroundColor: "#ef4444",
+  },
 
-  controls: { flexDirection: "row", marginTop: 16, gap: 12 },
+  controls: {
+    flexDirection: "row",
+    marginTop: 20,
+    gap: 16,
+    alignItems: "center",
+  },
 
   smallBtn: {
     backgroundColor: "#64748b",
-    padding: 12,
-    borderRadius: 10,
+    padding: 14,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 4,
   },
   saveBtn: {
     backgroundColor: "#fff",
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     justifyContent: "center",
-    borderRadius: 10,
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 4,
   },
-  saveText: { fontWeight: "600" },
+  saveText: { fontWeight: "700", fontSize: 16, color: "#111" },
 
   link: {
-    marginTop: 40,
+    marginBottom: 20,
     textAlign: "center",
     color: "#4f46e5",
     fontWeight: "600",
+    fontSize: 16,
   },
 });
