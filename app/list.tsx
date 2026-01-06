@@ -167,6 +167,11 @@ export default function ListScreen() {
   /* ---------------- UI ---------------- */
   return (
     <View style={styles.container}>
+      {/* 🔙 BACK BUTTON */}
+      <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <Text style={styles.backButtonText}>◀ Back</Text>
+      </TouchableOpacity>
+
       <Text style={styles.title}>🎙 Voice Journal</Text>
 
       <TextInput
@@ -195,12 +200,19 @@ export default function ListScreen() {
 /* ---------------- STYLES ---------------- */
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: "#f4f6fb" },
-  title: { fontSize: 26, fontWeight: "bold", textAlign: "center" },
+  backButton: { marginBottom: 12 },
+  backButtonText: { color: "#4f46e5", fontSize: 16 },
+  title: {
+    fontSize: 26,
+    fontWeight: "bold",
+    textAlign: "center",
+    marginBottom: 12,
+  },
   search: {
     backgroundColor: "#fff",
     padding: 12,
     borderRadius: 10,
-    marginVertical: 12,
+    marginBottom: 12,
   },
   card: {
     backgroundColor: "#fff",

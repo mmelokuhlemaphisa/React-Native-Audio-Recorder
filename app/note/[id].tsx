@@ -205,18 +205,23 @@ export default function NoteDetail() {
       <Text style={styles.meta}>{note.date}</Text>
 
       {/* Playback Controls */}
+      {/* Waveform */}
       <View style={styles.waveformContainer}>
         <View style={styles.waveform}>
           <View
             style={[
               styles.playhead,
-              { left: `${(position / duration) * 100}%` },
+              {
+                left: `${(position / (duration || note.duration)) * 100}%`,
+              },
             ]}
           />
         </View>
         <View style={styles.waveformLabels}>
-          <Text>{Math.floor(position / 1000)}s</Text>
-          <Text>{Math.floor(duration / 1000)}s</Text>
+          {/* Left: show position only if audio is playing */}
+          <Text>{playing ? Math.floor(position / 1000) + "s" : "0s"}</Text>
+          {/* Right: always show total duration */}
+          <Text>{Math.floor((duration || note.duration) / 1000)}s</Text>
         </View>
       </View>
 
@@ -230,15 +235,6 @@ export default function NoteDetail() {
           <Text style={styles.skipLabel}>10s</Text>
         </TouchableOpacity>
 
-        {/* Back 3s */}
-        <TouchableOpacity
-          onPress={() => setPosition(Math.max(0, position - 3000))}
-          style={styles.skipBtn}
-        >
-          <Ionicons name="play-back" size={28} color="#111" />
-          <Text style={styles.skipLabel}>3s</Text>
-        </TouchableOpacity>
-
         {/* Play / Pause */}
         <TouchableOpacity
           style={[styles.playBtn, playing && styles.playing]}
@@ -249,15 +245,6 @@ export default function NoteDetail() {
             size={32}
             color={playing ? "#fff" : "#4f46e5"}
           />
-        </TouchableOpacity>
-
-        {/* Forward 3s */}
-        <TouchableOpacity
-          onPress={() => setPosition(Math.min(duration, position + 3000))}
-          style={styles.skipBtn}
-        >
-          <Ionicons name="play-forward" size={28} color="#111" />
-          <Text style={styles.skipLabel}>3s</Text>
         </TouchableOpacity>
 
         {/* Forward 10s */}
