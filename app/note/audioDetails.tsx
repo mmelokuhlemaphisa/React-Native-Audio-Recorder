@@ -104,7 +104,12 @@ export default function NoteDetail() {
       }
       const { sound: newSound } = await Audio.Sound.createAsync(
         { uri: note.uri },
-        { rate: speed, shouldCorrectPitch: true, isLooping: repeat }
+        {
+          rate: speed,
+          shouldCorrectPitch: true,
+          isLooping: repeat,
+          positionMillis: position,
+        }
       );
       setSound(newSound);
       setPlaying(true);
@@ -228,7 +233,15 @@ export default function NoteDetail() {
       <View style={styles.controlsRow}>
         {/* Back 10s */}
         <TouchableOpacity
-          onPress={() => setPosition(Math.max(0, position - 10000))}
+          onPress={async () => {
+            const newPos = Math.max(0, position - 10000);
+            setPosition(newPos);
+            try {
+              if (sound) await sound.setPositionAsync(newPos);
+            } catch (e) {
+              console.warn("Back 10s failed", e);
+            }
+          }}
           style={styles.skipBtn}
         >
           <Ionicons name="play-back" size={28} color="#111" />
@@ -249,7 +262,18 @@ export default function NoteDetail() {
 
         {/* Forward 10s */}
         <TouchableOpacity
-          onPress={() => setPosition(Math.min(duration, position + 10000))}
+          onPress={async () => {
+            const newPos = Math.min(
+              duration || note.duration,
+              position + 10000
+            );
+            setPosition(newPos);
+            try {
+              if (sound) await sound.setPositionAsync(newPos);
+            } catch (e) {
+              console.warn("Forward 10s failed", e);
+            }
+          }}
           style={styles.skipBtn}
         >
           <Ionicons name="play-forward" size={28} color="#111" />
@@ -307,7 +331,23 @@ export default function NoteDetail() {
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity style={styles.settingItem} onPress={deleteNote}>
+            <TouchableOpacity
+              style={styles.settingItem}
+              onPress={() =>
+                Alert.alert(
+                  "Delete Recording",
+                  "Are you sure you want to delete this recording?",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete",
+                      style: "destructive",
+                      onPress: deleteNote,
+                    },
+                  ]
+                )
+              }
+            >
               <Text>Delete</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.settingItem} onPress={shareNote}>

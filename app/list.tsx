@@ -28,8 +28,25 @@ export default function ListScreen() {
   const [search, setSearch] = useState("");
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
-  const [progress, setProgress] = useState({ position: 0, duration: 1 });
-  const progressWidthRef = useRef(0); // 👈 store layout width safely
+
+  // Per-note playback progress: position, duration, optional width
+  const [playbackProgresses, setPlaybackProgresses] = useState<
+    Record<string, { position: number; duration: number; width?: number }>
+  >({});
+  const widthsRef = useRef<Record<string, number>>({}); // store per-item layout widths safely
+
+  // Format milliseconds to M:SS
+  const formatMillis = (ms: number) => {
+    const s = Math.floor((ms || 0) / 1000);
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${sec.toString().padStart(2, "0")}`;
+  };
+
+  // preview values while scrubbing so we can show a tooltip
+  const [scrubPreview, setScrubPreview] = useState<
+    Record<string, number | null>
+  >({});
 
   /* ---------------- FILE SYSTEM ---------------- */
   const getFileSystem = async () => {
@@ -87,10 +104,18 @@ export default function ListScreen() {
       playback.setOnPlaybackStatusUpdate((status) => {
         if (!status.isLoaded) return;
 
-        setProgress((prev) => ({
+        setPlaybackProgresses((prev) => ({
           ...prev,
-          position: status.positionMillis || 0,
-          duration: status.durationMillis || 1,
+          [note.id]: {
+            ...prev[note.id],
+            position: status.positionMillis || 0,
+            duration:
+              status.durationMillis ||
+              prev[note.id]?.duration ||
+              note.duration ||
+              1,
+            width: prev[note.id]?.width,
+          },
         }));
 
         if (status.didJustFinish) {
@@ -108,18 +133,65 @@ export default function ListScreen() {
   };
 
   /* ---------------- SEEK ---------------- */
-  const seek = async (x: number) => {
-    if (!sound || progressWidthRef.current === 0) return;
-    const percent = x / progressWidthRef.current;
-    const position = percent * progress.duration;
-    await sound.setPositionAsync(position);
+  // RAF-per-id throttles
+  const seekRaf = useRef<Record<string, number | null>>({});
+
+  const seek = (id: string, x: number, isFinal = false) => {
+    const w = widthsRef.current[id] || playbackProgresses[id]?.width || 1;
+    if (!w) return;
+    const percent = Math.max(0, Math.min(1, x / w));
+    const duration =
+      playbackProgresses[id]?.duration ||
+      notes.find((n) => n.id === id)?.duration ||
+      1;
+    const position = percent * duration;
+
+    // Immediate UI feedback for this note only
+    setPlaybackProgresses((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], position, duration },
+    }));
+
+    // If no active sound or different item, don't touch the native player
+    if (!sound || playingId !== id) return;
+
+    // Throttle native seeks per-id
+    const existing = seekRaf.current[id];
+    if (existing) cancelAnimationFrame(existing);
+
+    if (isFinal) {
+      // apply immediately
+      sound
+        .setPositionAsync(position)
+        .catch((e) => console.warn("seek final failed", e));
+      seekRaf.current[id] = null;
+      return;
+    }
+
+    seekRaf.current[id] = requestAnimationFrame(() => {
+      sound
+        .setPositionAsync(position)
+        .catch((e) => console.warn("seek setPositionAsync failed", e));
+      seekRaf.current[id] = null;
+    });
   };
 
   /* ---------------- RENDER ITEM ---------------- */
   const renderItem = ({ item }: { item: VoiceNote }) => {
     const isPlaying = playingId === item.id;
+    const progressFor = playbackProgresses[item.id] || {
+      position: 0,
+      duration: item.duration,
+    };
     const percent =
-      progress.duration > 0 ? (progress.position / progress.duration) * 100 : 0;
+      progressFor.duration > 0
+        ? (progressFor.position / progressFor.duration) * 100
+        : 0;
+    const preview = scrubPreview[item.id];
+    const displayPercent =
+      typeof preview === "number" && progressFor.duration
+        ? (preview / progressFor.duration) * 100
+        : percent;
 
     return (
       <TouchableOpacity
@@ -130,23 +202,55 @@ export default function ListScreen() {
         <View style={styles.row}>
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{item.name}</Text>
-            <Text style={styles.meta}>{item.date}</Text>
+            <Text style={styles.meta}>
+              {item.date} • {formatMillis(item.duration)}
+              {item.starred ? " • ⭐" : ""}
+            </Text>
 
-            {/* 🎚 PROGRESS BAR (ONLY WHEN PLAYING) */}
-            {isPlaying && (
+            {/* 🎚 PROGRESS BAR (always visible, supports scrubbing) */}
+            <View
+              style={styles.progressBar}
+              onLayout={(e) => {
+                const w = e.nativeEvent.layout.width;
+                widthsRef.current[item.id] = w;
+                setPlaybackProgresses((p) => ({
+                  ...p,
+                  [item.id]: { ...p[item.id], width: w },
+                }));
+              }}
+              onStartShouldSetResponder={() => true}
+              onResponderMove={(e) => seek(item.id, e.nativeEvent.locationX)}
+              onResponderGrant={(e) => seek(item.id, e.nativeEvent.locationX)}
+              onResponderRelease={(e) =>
+                seek(item.id, e.nativeEvent.locationX, true)
+              }
+            >
               <View
-                style={styles.progressBar}
-                onLayout={(e) => {
-                  progressWidthRef.current = e.nativeEvent.layout.width;
-                }}
-                onStartShouldSetResponder={() => true}
-                onResponderMove={(e) => seek(e.nativeEvent.locationX)}
-                onResponderGrant={(e) => seek(e.nativeEvent.locationX)}
-              >
-                <View style={[styles.progressFill, { width: `${percent}%` }]} />
-                <View style={[styles.scrubber, { left: `${percent}%` }]} />
-              </View>
-            )}
+                style={[
+                  styles.progressFill,
+                  { width: `${Math.max(0, Math.min(100, displayPercent))}%` },
+                ]}
+              />
+              <View
+                style={[
+                  styles.scrubber,
+                  { left: `${Math.max(0, Math.min(100, displayPercent))}%` },
+                ]}
+              />
+
+              {typeof preview === "number" && (
+                <View
+                  style={[
+                    styles.scrubTooltip,
+                    { left: `${Math.max(0, Math.min(95, displayPercent))}%` },
+                  ]}
+                >
+                  <Text style={styles.scrubTooltipText}>
+                    {formatMillis(preview)}
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
 
           {/* ▶ PLAY BUTTON */}
@@ -236,6 +340,18 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   playButtonText: { color: "#fff", fontSize: 20 },
+  scrubTooltip: {
+    position: "absolute",
+    top: -30,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: "rgba(0,0,0,0.8)",
+    transform: [{ translateX: -30 }],
+    minWidth: 48,
+    alignItems: "center",
+  },
+  scrubTooltipText: { color: "#fff", fontSize: 12, fontWeight: "600" },
 
   /* 🎚 Progress Bar */
   progressBar: {
