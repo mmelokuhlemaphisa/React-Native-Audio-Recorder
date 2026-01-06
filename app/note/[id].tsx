@@ -11,12 +11,20 @@ import {
   View,
 } from "react-native";
 
+interface VoiceNote {
+  id: string;
+  name: string;
+  uri: string;
+  date: string;
+  duration: number;
+  starred?: boolean;
+}
+
 export default function NoteDetail() {
   const router = useRouter();
-  const params = useLocalSearchParams();
-  const id = (params as any).id as string;
+  const { id } = useLocalSearchParams<{ id: string }>();
 
-  const [note, setNote] = useState<any | null>(null);
+  const [note, setNote] = useState<VoiceNote | null>(null);
   const [speed, setSpeed] = useState<number>(1);
   const [repeat, setRepeat] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -26,241 +34,173 @@ export default function NoteDetail() {
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
 
+  /* ---------------- FILE SYSTEM ---------------- */
+  const getFileSystem = async () => {
+    const fs = await import("expo-file-system/legacy");
+    return fs;
+  };
+
+  /* ---------------- LOAD NOTE ---------------- */
+  const loadNote = async () => {
+    if (!id) return;
+
+    try {
+      const FileSystem = await getFileSystem();
+      const file = FileSystem.documentDirectory + "notes.json";
+
+      const info = await FileSystem.getInfoAsync(file);
+      if (!info.exists) {
+        Alert.alert("Error", "Notes file not found");
+        router.back();
+        return;
+      }
+
+      const data = await FileSystem.readAsStringAsync(file);
+      const list: VoiceNote[] = JSON.parse(data);
+
+      const found = list.find((n) => n.id === id);
+      if (!found) {
+        Alert.alert("Error", "Voice note not found");
+        router.back();
+        return;
+      }
+
+      setNote(found);
+      setName(found.name);
+    } catch (err) {
+      console.warn("Load note error:", err);
+    }
+  };
+
   useEffect(() => {
     loadNote();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const getFileSystem = async (): Promise<any | null> => {
-    try {
-      const fs = await import("expo-file-system/legacy");
-      return fs;
-    } catch (err) {
-      console.warn("getFileSystem note: failed", err);
-      return null;
-    }
-  };
-
-  const loadNote = async () => {
-    const FileSystem = await getFileSystem();
-    if (!FileSystem) return;
-    const file = FileSystem.documentDirectory + "notes.json";
-    try {
-      const info = await FileSystem.getInfoAsync(file);
-      if (info.exists) {
-        const data = await FileSystem.readAsStringAsync(file);
-        const list = JSON.parse(data);
-        const found = list.find((n: any) => n.id === id);
-        if (found) {
-          setNote(found);
-          setName(found.name || "");
-        } else {
-          Alert.alert("Not found", "Note not found");
-          router.back();
-        }
-      }
-    } catch (err) {
-      console.warn(err);
-    }
-  };
-
+  /* ---------------- STAR ---------------- */
   const toggleStar = async () => {
+    if (!note) return;
+
     const FileSystem = await getFileSystem();
-    if (!FileSystem || !note) return;
-    try {
-      const data = await FileSystem.readAsStringAsync(
-        FileSystem.documentDirectory + "notes.json"
-      );
-      const list = JSON.parse(data);
-      const updated = list.map((n: any) =>
-        n.id === id ? { ...n, starred: !n.starred } : n
-      );
-      await FileSystem.writeAsStringAsync(
-        FileSystem.documentDirectory + "notes.json",
-        JSON.stringify(updated)
-      );
-      setNote((prev: any) => ({ ...prev, starred: !prev.starred }));
-    } catch (err) {
-      console.warn(err);
-    }
+    const file = FileSystem.documentDirectory + "notes.json";
+
+    const data = await FileSystem.readAsStringAsync(file);
+    const list: VoiceNote[] = JSON.parse(data);
+
+    const updated = list.map((n) =>
+      n.id === note.id ? { ...n, starred: !n.starred } : n
+    );
+
+    await FileSystem.writeAsStringAsync(file, JSON.stringify(updated));
+    setNote({ ...note, starred: !note.starred });
   };
 
+  /* ---------------- PLAY / PAUSE ---------------- */
   const togglePlay = async () => {
     if (!note) return;
 
-    const createSoundWithRetries = async (uri: string, attempts = 3) => {
-      const FileSystem = await getFileSystem();
-      if (FileSystem) {
-        try {
-          const info = await FileSystem.getInfoAsync(uri);
-          if (!info.exists) return { error: 'ENOENT' };
-        } catch (err) {
-          console.warn('note createSound: file info check failed', err);
-        }
-      }
-
-      let lastErr: any = null;
-      for (let i = 0; i < attempts; i++) {
-        try {
-          const res = await Audio.Sound.createAsync({ uri });
-          const s = res?.sound ?? null;
-          if (!s) throw new Error('createAsync returned no sound');
-          return { sound: s };
-        } catch (err: any) {
-          lastErr = err;
-          console.warn(`note createSound attempt ${i + 1} failed`, (err as any)?.message || err);
-          await new Promise((r) => setTimeout(r, 120));
-        }
-      }
-      return { error: lastErr };
-    };
     try {
-      // If there's a sound playing, try pausing it first
       if (sound) {
-        const st = await sound.getStatusAsync();
-        if ((st as any).isLoaded && (st as any).isPlaying) {
+        const status = await sound.getStatusAsync();
+        if (status.isLoaded && status.isPlaying) {
           await sound.pauseAsync();
           setPlaying(false);
           return;
         }
-        // unload existing to avoid conflicting native state
-        try {
-          await sound.unloadAsync();
-        } catch (e) {
-          console.warn("note togglePlay: unload existing failed", e);
-        }
+        await sound.unloadAsync();
         setSound(null);
-        await new Promise((r) => setTimeout(r, 50));
       }
 
-      const res = await createSoundWithRetries(note.uri, 3);
-      if ((res as any)?.error) {
-        const err = (res as any).error;
-        if (err === 'ENOENT' || /FileNotFoundException|ENOENT/.test(String(err))) {
-          Alert.alert('File Missing', 'Recording file not found. Delete this note?', [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Delete', style: 'destructive', onPress: doDelete },
-          ]);
-          setNote((prev: any) => (prev ? { ...prev, missing: true } : prev));
-          return;
-        }
-        console.warn('note togglePlay: createSound ultimately failed', err);
-        return;
-      }
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri: note.uri },
+        { rate: speed, shouldCorrectPitch: true, isLooping: repeat }
+      );
 
-      const s = (res as any).sound;
-      setSound(s);
+      setSound(newSound);
       setPlaying(true);
+      await newSound.playAsync();
 
-      // Ensure rate & looping are set and play
-      try {
-        await s.setRateAsync(speed, true);
-      } catch (err) {
-        console.warn('note togglePlay: setRate failed', err);
-      }
-      try {
-        await s.playAsync();
-      } catch (err) {
-        console.warn('note togglePlay: playAsync failed', err);
-      }
+      newSound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) return;
 
-      s.setOnPlaybackStatusUpdate((status: any) => {
-        if (!status) return;
-        const s2: any = status;
-        if (s2.isLoaded) {
-          setPosition(s2.positionMillis || 0);
-          setDuration(s2.durationMillis || 0);
-        }
-        if (s2.didJustFinish) {
-          if (repeat) {
-            s.setPositionAsync(0);
-            s.playAsync();
-          } else {
-            setPlaying(false);
-          }
+        setPosition(status.positionMillis ?? 0);
+        setDuration(status.durationMillis ?? note.duration);
+
+        if (status.didJustFinish && !repeat) {
+          setPlaying(false);
         }
       });
     } catch (err) {
-      console.warn("togglePlay failed", err);
-      // keep failures quiet in UI; developer log visible for diagnostics
+      Alert.alert("Playback Error", "Unable to play this recording");
+      console.warn(err);
     }
   };
 
+  /* ---------------- UPDATE SPEED / LOOP ---------------- */
   useEffect(() => {
-    // update rate and looping if sound exists
-    (async () => {
-      if (!sound) return;
-      try {
-        await sound.setRateAsync(speed, true);
-        await sound.setIsLoopingAsync(repeat);
-      } catch (err) {
-        console.warn("update sound settings failed", err);
-      }
-    })();
-  }, [sound, speed, repeat]);
+    if (!sound) return;
+    sound.setRateAsync(speed, true);
+    sound.setIsLoopingAsync(repeat);
+  }, [speed, repeat]);
 
+  /* ---------------- CLEANUP ---------------- */
   useEffect(() => {
     return () => {
-      (async () => {
-        try {
-          if (sound) await sound.unloadAsync();
-        } catch {}
-      })();
+      sound?.unloadAsync();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sound]);
 
-  const doDelete = async () => {
+  /* ---------------- DELETE ---------------- */
+  const deleteNote = async () => {
+    if (!note) return;
+
     const FileSystem = await getFileSystem();
-    if (!FileSystem || !note) return;
-    try {
-      const data = await FileSystem.readAsStringAsync(
-        FileSystem.documentDirectory + "notes.json"
-      );
-      const list = JSON.parse(data);
-      const filtered = list.filter((n: any) => n.id !== id);
-      await FileSystem.writeAsStringAsync(
-        FileSystem.documentDirectory + "notes.json",
-        JSON.stringify(filtered)
-      );
-      // delete file
-      await FileSystem.deleteAsync(note.uri, { idempotent: true });
-      router.push("/list");
-    } catch (err) {
-      console.warn(err);
-    }
+    const file = FileSystem.documentDirectory + "notes.json";
+
+    const data = await FileSystem.readAsStringAsync(file);
+    const list: VoiceNote[] = JSON.parse(data);
+
+    const filtered = list.filter((n) => n.id !== note.id);
+    await FileSystem.writeAsStringAsync(file, JSON.stringify(filtered));
+    await FileSystem.deleteAsync(note.uri, { idempotent: true });
+
+    router.replace("/list");
   };
 
-  const rename = async () => {
-    if (!name) return;
+  /* ---------------- RENAME ---------------- */
+  const renameNote = async () => {
+    if (!note || !name.trim()) return;
+
     const FileSystem = await getFileSystem();
-    if (!FileSystem || !note) return;
-    try {
-      const data = await FileSystem.readAsStringAsync(
-        FileSystem.documentDirectory + "notes.json"
-      );
-      const list = JSON.parse(data);
-      const updated = list.map((n: any) => (n.id === id ? { ...n, name } : n));
-      await FileSystem.writeAsStringAsync(
-        FileSystem.documentDirectory + "notes.json",
-        JSON.stringify(updated)
-      );
-      setNote((prev: any) => ({ ...prev, name }));
-      setEditing(false);
-    } catch (err) {
-      console.warn(err);
-    }
+    const file = FileSystem.documentDirectory + "notes.json";
+
+    const data = await FileSystem.readAsStringAsync(file);
+    const list: VoiceNote[] = JSON.parse(data);
+
+    const updated = list.map((n) => (n.id === note.id ? { ...n, name } : n));
+
+    await FileSystem.writeAsStringAsync(file, JSON.stringify(updated));
+    setNote({ ...note, name });
+    setEditing(false);
   };
 
-  if (!note) return null;
+  if (!note) {
+    return (
+      <View style={styles.container}>
+        <Text>Loading...</Text>
+      </View>
+    );
+  }
 
+  /* ---------------- UI ---------------- */
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <TouchableOpacity onPress={() => router.back()}>
           <Text style={styles.link}>◀ Back</Text>
         </TouchableOpacity>
+
         <View style={{ flex: 1 }} />
+
         <TouchableOpacity onPress={toggleStar}>
           <Ionicons
             name={note.starred ? "star" : "star-outline"}
@@ -273,8 +213,8 @@ export default function NoteDetail() {
       {editing ? (
         <>
           <TextInput value={name} onChangeText={setName} style={styles.input} />
-          <TouchableOpacity onPress={rename} style={styles.btn}>
-            <Text style={styles.btnText}>Save</Text>
+          <TouchableOpacity onPress={renameNote} style={styles.btn}>
+            <Text>Save</Text>
           </TouchableOpacity>
         </>
       ) : (
@@ -288,17 +228,10 @@ export default function NoteDetail() {
               {[0.5, 1, 1.5, 2].map((s) => (
                 <TouchableOpacity
                   key={s}
-                  style={[
-                    styles.speedBtn,
-                    speed === s ? styles.speedActive : null,
-                  ]}
-                  onPress={() => setSpeed(s as number)}
+                  style={[styles.speedBtn, speed === s && styles.speedActive]}
+                  onPress={() => setSpeed(s)}
                 >
-                  <Text
-                    style={speed === s ? styles.speedActiveText : undefined}
-                  >
-                    {s}x
-                  </Text>
+                  <Text style={speed === s && { color: "#fff" }}>{s}x</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -307,8 +240,8 @@ export default function NoteDetail() {
           <View style={styles.controlsRow}>
             <Text>Repeat</Text>
             <TouchableOpacity
-              style={[styles.smallBtn, repeat ? styles.smallBtnActive : null]}
-              onPress={() => setRepeat((r) => !r)}
+              style={[styles.smallBtn, repeat && styles.smallBtnActive]}
+              onPress={() => setRepeat(!repeat)}
             >
               <Text style={{ color: repeat ? "#fff" : "#111" }}>
                 {repeat ? "On" : "Off"}
@@ -316,10 +249,10 @@ export default function NoteDetail() {
             </TouchableOpacity>
           </View>
 
-          <View style={{ alignItems: "center", marginTop: 18 }}>
+          <View style={{ alignItems: "center", marginTop: 20 }}>
             <TouchableOpacity
+              style={[styles.playBtn, playing && styles.playing]}
               onPress={togglePlay}
-              style={[styles.playBtn, playing ? styles.playing : null]}
             >
               <Ionicons
                 name={playing ? "pause" : "play"}
@@ -327,29 +260,30 @@ export default function NoteDetail() {
                 color={playing ? "#fff" : "#4f46e5"}
               />
             </TouchableOpacity>
-            <Text style={{ color: "#666", marginTop: 8 }}>
-              {Math.floor(position / 1000)}s /{" "}
-              {Math.floor((duration || note.duration) / 1000)}s
+
+            <Text style={{ marginTop: 8 }}>
+              {Math.floor(position / 1000)}s / {Math.floor(duration / 1000)}s
             </Text>
           </View>
 
           <View style={styles.actionsRow}>
             <TouchableOpacity
-              onPress={() => setEditing(true)}
               style={styles.btn}
+              onPress={() => setEditing(true)}
             >
-              <Text style={styles.btnText}>Rename</Text>
+              <Text>Rename</Text>
             </TouchableOpacity>
+
             <TouchableOpacity
-              onPress={() => {
-                Alert.alert("Delete", "Delete this note?", [
-                  { text: "Cancel", style: "cancel" },
-                  { text: "Delete", style: "destructive", onPress: doDelete },
-                ]);
-              }}
               style={[styles.btn, styles.danger]}
+              onPress={() =>
+                Alert.alert("Delete", "Delete this note?", [
+                  { text: "Cancel" },
+                  { text: "Delete", style: "destructive", onPress: deleteNote },
+                ])
+              }
             >
-              <Text style={styles.btnText}>Delete</Text>
+              <Text>Delete</Text>
             </TouchableOpacity>
           </View>
         </>
@@ -358,6 +292,7 @@ export default function NoteDetail() {
   );
 }
 
+/* ---------------- STYLES ---------------- */
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, backgroundColor: "#f4f6fb" },
   headerRow: { flexDirection: "row", alignItems: "center" },
@@ -368,32 +303,29 @@ const styles = StyleSheet.create({
   speedRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   speedBtn: { padding: 8, borderRadius: 8, backgroundColor: "#fff" },
   speedActive: { backgroundColor: "#4f46e5" },
-  speedActiveText: { color: "#fff" },
   smallBtn: {
-    marginLeft: 8,
     padding: 8,
     borderRadius: 8,
     backgroundColor: "#eee",
+    marginLeft: 8,
   },
   smallBtnActive: { backgroundColor: "#4f46e5" },
-  actionsRow: { flexDirection: "row", gap: 12, marginTop: 16 },
   playBtn: {
-    marginTop: 6,
     width: 64,
     height: 64,
-    borderRadius: 999,
+    borderRadius: 32,
+    backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fff",
   },
   playing: { backgroundColor: "#4f46e5" },
-  btn: {
-    backgroundColor: "#fff",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  btnText: { color: "#111" },
+  actionsRow: { flexDirection: "row", gap: 12, marginTop: 20 },
+  btn: { backgroundColor: "#fff", padding: 10, borderRadius: 8 },
   danger: { backgroundColor: "#fee2e2" },
-  input: { backgroundColor: "#fff", padding: 8, borderRadius: 8, marginTop: 8 },
+  input: {
+    backgroundColor: "#fff",
+    padding: 8,
+    borderRadius: 8,
+    marginTop: 12,
+  },
 });
