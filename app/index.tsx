@@ -1,6 +1,3 @@
-// App.tsx
-// Task 3 – React Native Audio Recorder (Lesson 5)
-
 import { Ionicons } from "@expo/vector-icons";
 import { Audio } from "expo-av";
 import { useRouter } from "expo-router";
@@ -14,7 +11,10 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Dimensions,
 } from "react-native";
+
+const { width } = Dimensions.get("window");
 
 export default function App() {
   const router = useRouter();
@@ -29,18 +29,12 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [seconds, setSeconds] = useState(0);
 
-  /* ---------------- FILE SYSTEM ---------------- */
-  const getFileSystem = async () => {
-    if (!isNative) return null;
-    return await import("expo-file-system/legacy");
-  };
+  const getFileSystem = async () => await import("expo-file-system/legacy");
 
-  /* ---------------- TIMER ---------------- */
+  /* ---------------- TIMER LOGIC ---------------- */
   const startTimer = () => {
     stopTimer();
-    timerRef.current = setInterval(() => {
-      setSeconds((s) => s + 1);
-    }, 1000);
+    timerRef.current = setInterval(() => setSeconds((s) => s + 1), 1000);
   };
 
   const stopTimer = () => {
@@ -56,42 +50,10 @@ export default function App() {
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
 
-  /* ---------------- ANIMATION ---------------- */
-  useEffect(() => {
-    if (recording && !paused) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.08,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
-      pulseAnim.setValue(1);
-    }
-  }, [recording, paused]);
-
-  /* ---------------- PERMISSIONS ---------------- */
-  const requestPermissions = async () => {
-    const { status } = await Audio.requestPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission required", "Microphone access is needed");
-      return false;
-    }
-    return true;
-  };
-
-  /* ---------------- RECORDING ---------------- */
+  /* ---------------- RECORDING LOGIC ---------------- */
   const startRecording = async () => {
-    const ok = await requestPermissions();
-    if (!ok) return;
+    const { status } = await Audio.requestPermissionsAsync();
+    if (status !== "granted") return Alert.alert("Permission denied");
 
     try {
       await Audio.setAudioModeAsync({
@@ -99,254 +61,275 @@ export default function App() {
         playsInSilentModeIOS: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      // Fetch saved quality settings (defaults to High)
+      const FileSystem = await getFileSystem();
+      const settingsFile = FileSystem.documentDirectory + "settings.json";
+      let qualityPreset = Audio.RecordingOptionsPresets.HIGH_QUALITY;
 
+      const settingsInfo = await FileSystem.getInfoAsync(settingsFile);
+      if (settingsInfo.exists) {
+        const settings = JSON.parse(
+          await FileSystem.readAsStringAsync(settingsFile),
+        );
+        if (settings.quality === "Low")
+          qualityPreset = Audio.RecordingOptionsPresets.LOW_QUALITY;
+      }
+
+      const { recording } = await Audio.Recording.createAsync(qualityPreset);
       recordingRef.current = recording;
       setRecording(recording);
       setPaused(false);
       setSeconds(0);
       startTimer();
-    } catch {
-      Alert.alert("Error", "Failed to start recording");
+
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.2,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 800,
+            useNativeDriver: true,
+          }),
+        ]),
+      ).start();
+    } catch (err) {
+      Alert.alert("Error", "Could not start recording");
     }
-  };
-
-  const pauseRecording = async () => {
-    if (!recordingRef.current) return;
-    await recordingRef.current.pauseAsync();
-    setPaused(true);
-    stopTimer();
-  };
-
-  const resumeRecording = async () => {
-    if (!recordingRef.current) return;
-    await recordingRef.current.startAsync();
-    setPaused(false);
-    startTimer();
   };
 
   const stopRecording = async () => {
     if (!recordingRef.current) return;
-
     stopTimer();
     setSaving(true);
+    pulseAnim.setValue(1);
 
     try {
       await recordingRef.current.stopAndUnloadAsync();
       const uri = recordingRef.current.getURI();
       const status = await recordingRef.current.getStatusAsync();
-
-      if (!uri) throw new Error("No URI");
-
       const FileSystem = await getFileSystem();
-      if (!FileSystem) return;
 
       const notesFile = FileSystem.documentDirectory + "notes.json";
-      let list: any[] = [];
-
+      let list = [];
       const info = await FileSystem.getInfoAsync(notesFile);
-      if (info.exists) {
+      if (info.exists)
         list = JSON.parse(await FileSystem.readAsStringAsync(notesFile));
-      }
 
-      // ✅ RECORDING NUMBER (1, 2, 3...)
-      const recordingNumber = list.length + 1;
       const id = Date.now().toString();
+      const newPath =
+        FileSystem.documentDirectory + `recordings/voice_${id}.m4a`;
 
-      const dir = FileSystem.documentDirectory + "recordings/";
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
-
-      const newPath = dir + `voice_${id}.m4a`;
-      await FileSystem.moveAsync({ from: uri, to: newPath });
+      await FileSystem.makeDirectoryAsync(
+        FileSystem.documentDirectory + "recordings/",
+        { intermediates: true },
+      );
+      await FileSystem.moveAsync({ from: uri!, to: newPath });
 
       const note = {
         id,
         uri: newPath,
-        name: `Recording ${recordingNumber}`,
-        date: new Date().toLocaleString(),
+        name: `New Recording ${list.length + 1}`,
+        date: new Date().toLocaleDateString(),
         duration: status.durationMillis || 0,
       };
 
       list.unshift(note);
       await FileSystem.writeAsStringAsync(notesFile, JSON.stringify(list));
-
       router.push("/list");
-    } catch {
-      Alert.alert("Error", "Failed to save recording");
+    } catch (err) {
+      Alert.alert("Error", "Saving failed");
     } finally {
       setSaving(false);
       setRecording(null);
-      setPaused(false);
-      setSeconds(0);
-      recordingRef.current = null;
     }
   };
 
-  /* ---------------- UI ---------------- */
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>🎙 Voice Recorder</Text>
+      {/* Background Decorative Circles */}
+      <View style={styles.bgCircle} />
 
-      {recording && (
-        <View style={styles.recordBanner}>
-          <View style={styles.dot} />
-          <Text style={styles.recordText}>
-            {paused ? "Paused" : "Recording"} • {formatTime(seconds)}
-          </Text>
-        </View>
-      )}
+      <View style={styles.header}>
+        <Text style={styles.brand}>EchoVault</Text>
+        <TouchableOpacity
+          style={styles.iconBtn}
+          onPress={() => router.push("/list")}
+        >
+          <Ionicons name="list" size={24} color="#4f46e5" />
+        </TouchableOpacity>
+      </View>
 
-      <View style={styles.center}>
-        <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+      <View style={styles.main}>
+        <Text style={styles.timer}>{formatTime(seconds)}</Text>
+        <Text style={styles.statusText}>
+          {recording
+            ? paused
+              ? "Recording Paused"
+              : "Listening..."
+            : "Ready to Record"}
+        </Text>
+
+        <View style={styles.visualizerContainer}>
+          {/* Pulsing Aura */}
+          <Animated.View
+            style={[
+              styles.aura,
+              {
+                transform: [{ scale: pulseAnim }],
+                opacity: recording && !paused ? 0.3 : 0,
+              },
+            ]}
+          />
+
           <TouchableOpacity
-            style={[styles.recordBtn, recording && styles.stopBtn]}
+            activeOpacity={0.8}
             onPress={recording ? stopRecording : startRecording}
+            style={[styles.recordBtn, recording && styles.activeBtn]}
           >
-            <Ionicons
-              name={recording ? "stop" : "mic"}
-              size={36}
-              color="#fff"
-            />
+            {saving ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Ionicons
+                name={recording ? "stop" : "mic"}
+                size={40}
+                color="#fff"
+              />
+            )}
           </TouchableOpacity>
-        </Animated.View>
+        </View>
 
-        {recording && (
-          <View style={styles.controls}>
+        {recording && !saving && (
+          <View style={styles.auxControls}>
             <TouchableOpacity
-              style={styles.smallBtn}
-              onPress={paused ? resumeRecording : pauseRecording}
+              style={styles.auxBtn}
+              onPress={async () => {
+                if (paused) {
+                  await recordingRef.current?.startAsync();
+                  startTimer();
+                } else {
+                  await recordingRef.current?.pauseAsync();
+                  stopTimer();
+                }
+                setPaused(!paused);
+              }}
             >
               <Ionicons
                 name={paused ? "play" : "pause"}
-                size={20}
-                color="#fff"
+                size={24}
+                color="#475569"
               />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.saveBtn}
-              onPress={stopRecording}
-              disabled={saving}
-            >
-              {saving ? (
-                <ActivityIndicator size="small" />
-              ) : (
-                <Text style={styles.saveText}>Save</Text>
-              )}
             </TouchableOpacity>
           </View>
         )}
       </View>
 
-      <TouchableOpacity onPress={() => router.push("/list")}>
-        <Text style={styles.link}>📄 View Recordings</Text>
+      <TouchableOpacity
+        style={styles.footerLink}
+        onPress={() => router.push("/list")}
+      >
+        <Text style={styles.footerText}>View All Recordings</Text>
+        <Ionicons name="chevron-forward" size={16} color="#6366f1" />
       </TouchableOpacity>
     </View>
   );
 }
-/* ---------------- STYLES ---------------- */
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    padding: 20,
-    backgroundColor: "#f4f6fb",
-    justifyContent: "space-between",
+  container: { flex: 1, backgroundColor: "#f8fafc", padding: 25 },
+  bgCircle: {
+    position: "absolute",
+    width: 300,
+    height: 300,
+    borderRadius: 150,
+    backgroundColor: "#e0e7ff",
+    top: -50,
+    right: -100,
+    opacity: 0.5,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    textAlign: "center",
-    marginTop: 20,
-    color: "#111",
-  },
-
-  recordBanner: {
+  header: {
+    marginTop: 50,
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
+  },
+  brand: {
+    fontSize: 24,
+    fontWeight: "900",
+    color: "#1e293b",
+    letterSpacing: -1,
+  },
+  iconBtn: {
+    width: 45,
+    height: 45,
+    borderRadius: 15,
+    backgroundColor: "#fff",
     justifyContent: "center",
-    backgroundColor: "#fee2e2",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    marginVertical: 16,
-    shadowColor: "#000",
+    alignItems: "center",
+    elevation: 4,
     shadowOpacity: 0.1,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 4,
   },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: "#ef4444",
-    marginRight: 10,
+  main: { flex: 1, justifyContent: "center", alignItems: "center" },
+  timer: {
+    fontSize: 72,
+    fontWeight: "300",
+    color: "#1e293b",
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
   },
-  recordText: {
-    color: "#b91c1c",
-    fontWeight: "700",
+  statusText: {
     fontSize: 16,
+    color: "#64748b",
+    fontWeight: "600",
+    marginBottom: 50,
   },
-
-  center: {
-    alignItems: "center",
+  visualizerContainer: {
     justifyContent: "center",
-    marginTop: 40,
+    alignItems: "center",
+    height: 200,
+    width: 200,
   },
-
+  aura: {
+    position: "absolute",
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "#4f46e5",
+  },
   recordBtn: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
     backgroundColor: "#4f46e5",
     justifyContent: "center",
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 6,
+    elevation: 8,
+    shadowColor: "#4f46e5",
+    shadowOpacity: 0.4,
   },
-  stopBtn: {
-    backgroundColor: "#ef4444",
-  },
-
-  controls: {
-    flexDirection: "row",
-    marginTop: 20,
-    gap: 16,
-    alignItems: "center",
-  },
-
-  smallBtn: {
-    backgroundColor: "#64748b",
-    padding: 14,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 4,
-  },
-  saveBtn: {
+  activeBtn: { backgroundColor: "#ef4444", shadowColor: "#ef4444" },
+  auxControls: { flexDirection: "row", marginTop: 40, gap: 20 },
+  auxBtn: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: "#fff",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
     justifyContent: "center",
-    borderRadius: 12,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 4,
+    alignItems: "center",
+    elevation: 2,
   },
-  saveText: { fontWeight: "700", fontSize: 16, color: "#111" },
-
-  link: {
-    marginBottom: 20,
-    textAlign: "center",
-    color: "#4f46e5",
-    fontWeight: "600",
-    fontSize: 16,
+  footerLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    marginBottom: 30,
+    padding: 15,
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    elevation: 1,
   },
+  footerText: { fontWeight: "700", color: "#6366f1" },
 });

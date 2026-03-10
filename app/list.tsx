@@ -1,5 +1,6 @@
 import { Audio } from "expo-av";
 import { useFocusEffect, useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons"; // Added for better icons
 import React, { useCallback, useRef, useState } from "react";
 import {
   FlatList,
@@ -29,13 +30,12 @@ export default function ListScreen() {
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
 
-  // Per-note playback progress: position, duration, optional width
   const [playbackProgresses, setPlaybackProgresses] = useState<
     Record<string, { position: number; duration: number; width?: number }>
   >({});
-  const widthsRef = useRef<Record<string, number>>({}); // store per-item layout widths safely
+  const widthsRef = useRef<Record<string, number>>({});
+  const seekRaf = useRef<Record<string, number | null>>({});
 
-  // Format milliseconds to M:SS
   const formatMillis = (ms: number) => {
     const s = Math.floor((ms || 0) / 1000);
     const m = Math.floor(s / 60);
@@ -43,31 +43,27 @@ export default function ListScreen() {
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
 
-  // preview values while scrubbing so we can show a tooltip
-  const [scrubPreview, setScrubPreview] = useState<
-    Record<string, number | null>
-  >({});
-
-  /* ---------------- FILE SYSTEM ---------------- */
   const getFileSystem = async () => {
     if (!isNative) return null;
     return await import("expo-file-system/legacy");
   };
 
-  /* ---------------- LOAD NOTES ---------------- */
   const loadNotes = async () => {
     if (!isNative) return;
-    const FileSystem = await getFileSystem();
-    if (!FileSystem) return;
+    try {
+      const FileSystem = await getFileSystem();
+      if (!FileSystem) return;
+      const file = FileSystem.documentDirectory + "notes.json";
+      const info = await FileSystem.getInfoAsync(file);
 
-    const file = FileSystem.documentDirectory + "notes.json";
-    const info = await FileSystem.getInfoAsync(file);
-
-    if (info.exists) {
-      const data = await FileSystem.readAsStringAsync(file);
-      setNotes(JSON.parse(data));
-    } else {
-      setNotes([]);
+      if (info.exists) {
+        const data = await FileSystem.readAsStringAsync(file);
+        setNotes(JSON.parse(data));
+      } else {
+        setNotes([]);
+      }
+    } catch (e) {
+      console.error("Load notes error", e);
     }
   };
 
@@ -79,10 +75,9 @@ export default function ListScreen() {
         setSound(null);
         setPlayingId(null);
       };
-    }, [])
+    }, [sound]),
   );
 
-  /* ---------------- PLAY / PAUSE ---------------- */
   const togglePlay = async (note: VoiceNote) => {
     try {
       if (playingId === note.id && sound) {
@@ -90,41 +85,29 @@ export default function ListScreen() {
         setPlayingId(null);
         return;
       }
-
       if (sound) {
         await sound.unloadAsync();
         setSound(null);
       }
-
       const { sound: playback } = await Audio.Sound.createAsync(
         { uri: note.uri },
-        { shouldPlay: true }
+        { shouldPlay: true },
       );
-
       playback.setOnPlaybackStatusUpdate((status) => {
         if (!status.isLoaded) return;
-
         setPlaybackProgresses((prev) => ({
           ...prev,
           [note.id]: {
             ...prev[note.id],
             position: status.positionMillis || 0,
-            duration:
-              status.durationMillis ||
-              prev[note.id]?.duration ||
-              note.duration ||
-              1,
-            width: prev[note.id]?.width,
+            duration: status.durationMillis || note.duration || 1,
           },
         }));
-
         if (status.didJustFinish) {
           setPlayingId(null);
-          playback.unloadAsync().catch(() => {});
           setSound(null);
         }
       });
-
       setSound(playback);
       setPlayingId(note.id);
     } catch (err) {
@@ -132,13 +115,8 @@ export default function ListScreen() {
     }
   };
 
-  /* ---------------- SEEK ---------------- */
-  // RAF-per-id throttles
-  const seekRaf = useRef<Record<string, number | null>>({});
-
   const seek = (id: string, x: number, isFinal = false) => {
-    const w = widthsRef.current[id] || playbackProgresses[id]?.width || 1;
-    if (!w) return;
+    const w = widthsRef.current[id] || 1;
     const percent = Math.max(0, Math.min(1, x / w));
     const duration =
       playbackProgresses[id]?.duration ||
@@ -146,235 +124,231 @@ export default function ListScreen() {
       1;
     const position = percent * duration;
 
-    // Immediate UI feedback for this note only
     setPlaybackProgresses((prev) => ({
       ...prev,
       [id]: { ...prev[id], position, duration },
     }));
 
-    // If no active sound or different item, don't touch the native player
     if (!sound || playingId !== id) return;
-
-    // Throttle native seeks per-id
     const existing = seekRaf.current[id];
     if (existing) cancelAnimationFrame(existing);
 
     if (isFinal) {
-      // apply immediately
-      sound
-        .setPositionAsync(position)
-        .catch((e) => console.warn("seek final failed", e));
+      sound.setPositionAsync(position).catch(() => {});
       seekRaf.current[id] = null;
       return;
     }
 
     seekRaf.current[id] = requestAnimationFrame(() => {
-      sound
-        .setPositionAsync(position)
-        .catch((e) => console.warn("seek setPositionAsync failed", e));
+      sound.setPositionAsync(position).catch(() => {});
       seekRaf.current[id] = null;
     });
   };
 
-  /* ---------------- RENDER ITEM ---------------- */
   const renderItem = ({ item }: { item: VoiceNote }) => {
     const isPlaying = playingId === item.id;
-    const progressFor = playbackProgresses[item.id] || {
+    const progress = playbackProgresses[item.id] || {
       position: 0,
       duration: item.duration,
     };
     const percent =
-      progressFor.duration > 0
-        ? (progressFor.position / progressFor.duration) * 100
-        : 0;
-    const preview = scrubPreview[item.id];
-    const displayPercent =
-      typeof preview === "number" && progressFor.duration
-        ? (preview / progressFor.duration) * 100
-        : percent;
+      progress.duration > 0 ? (progress.position / progress.duration) * 100 : 0;
 
     return (
       <TouchableOpacity
         style={styles.card}
-        activeOpacity={0.8}
-        onPress={() => router.push(`/note/${item.id}`)}
+        activeOpacity={0.9}
+        onPress={() =>
+          router.push({ pathname: "/note/[id]", params: { id: item.id } })
+        }
       >
-        <View style={styles.row}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.name}>{item.name}</Text>
-            <Text style={styles.meta}>
-              {item.date} • {formatMillis(item.duration)}
-              {item.starred ? " • ⭐" : ""}
+        <View style={styles.cardHeader}>
+          <View style={styles.cardInfo}>
+            <Text style={styles.noteName} numberOfLines={1}>
+              {item.name}
             </Text>
+            <Text style={styles.noteMeta}>
+              {item.date} • {formatMillis(item.duration)}
+            </Text>
+          </View>
+          {item.starred && <Ionicons name="star" size={16} color="#f59e0b" />}
+        </View>
 
-            {/* 🎚 PROGRESS BAR (always visible, supports scrubbing) */}
-            <View
-              style={styles.progressBar}
-              onLayout={(e) => {
-                const w = e.nativeEvent.layout.width;
-                widthsRef.current[item.id] = w;
-                setPlaybackProgresses((p) => ({
-                  ...p,
-                  [item.id]: { ...p[item.id], width: w },
-                }));
-              }}
-              onStartShouldSetResponder={() => true}
-              onResponderMove={(e) => seek(item.id, e.nativeEvent.locationX)}
-              onResponderGrant={(e) => seek(item.id, e.nativeEvent.locationX)}
-              onResponderRelease={(e) =>
-                seek(item.id, e.nativeEvent.locationX, true)
-              }
-            >
-              <View
-                style={[
-                  styles.progressFill,
-                  { width: `${Math.max(0, Math.min(100, displayPercent))}%` },
-                ]}
-              />
-              <View
-                style={[
-                  styles.scrubber,
-                  { left: `${Math.max(0, Math.min(100, displayPercent))}%` },
-                ]}
-              />
-
-              {typeof preview === "number" && (
-                <View
-                  style={[
-                    styles.scrubTooltip,
-                    { left: `${Math.max(0, Math.min(95, displayPercent))}%` },
-                  ]}
-                >
-                  <Text style={styles.scrubTooltipText}>
-                    {formatMillis(preview)}
-                  </Text>
-                </View>
-              )}
-            </View>
+        <View style={styles.cardBody}>
+          <View
+            style={styles.progressBarContainer}
+            onLayout={(e) =>
+              (widthsRef.current[item.id] = e.nativeEvent.layout.width)
+            }
+            onStartShouldSetResponder={() => true}
+            onResponderMove={(e) => seek(item.id, e.nativeEvent.locationX)}
+            onResponderRelease={(e) =>
+              seek(item.id, e.nativeEvent.locationX, true)
+            }
+          >
+            <View style={styles.progressBarBackground} />
+            <View style={[styles.progressBarFill, { width: `${percent}%` }]} />
+            <View style={[styles.progressBarHandle, { left: `${percent}%` }]} />
           </View>
 
-          {/* ▶ PLAY BUTTON */}
           <TouchableOpacity
             onPress={(e) => {
               e.stopPropagation();
               togglePlay(item);
             }}
-            style={styles.playButton}
+            style={[styles.smallPlayButton, isPlaying && styles.playingButton]}
           >
-            <Text style={styles.playButtonText}>{isPlaying ? "⏸" : "▶"}</Text>
+            <Ionicons
+              name={isPlaying ? "pause" : "play"}
+              size={18}
+              color={isPlaying ? "#fff" : "#4f46e5"}
+            />
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
     );
   };
 
-  /* ---------------- UI ---------------- */
   return (
     <View style={styles.container}>
-      {/* 🔙 BACK BUTTON */}
-      <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-        <Text style={styles.backButtonText}>◀ Back</Text>
-      </TouchableOpacity>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={24} color="#1e293b" />
+        </TouchableOpacity>
+        <Text style={styles.screenTitle}>My Recordings</Text>
+        <View style={{ width: 40 }} />
+      </View>
 
-      <Text style={styles.title}>🎙 Voice Journal</Text>
-
-      <TextInput
-        placeholder="Search notes"
-        value={search}
-        onChangeText={setSearch}
-        style={styles.search}
-      />
+      <View style={styles.searchContainer}>
+        <Ionicons
+          name="search-outline"
+          size={20}
+          color="#94a3b8"
+          style={styles.searchIcon}
+        />
+        <TextInput
+          placeholder="Search memos..."
+          placeholderTextColor="#94a3b8"
+          value={search}
+          onChangeText={setSearch}
+          style={styles.searchInput}
+        />
+      </View>
 
       <FlatList
         data={notes.filter((n) =>
-          n.name.toLowerCase().includes(search.toLowerCase())
+          n.name.toLowerCase().includes(search.toLowerCase()),
         )}
         keyExtractor={(i) => i.id}
         renderItem={renderItem}
+        contentContainerStyle={styles.listContent}
         ListEmptyComponent={
-          <Text style={{ textAlign: "center", marginTop: 40, color: "#666" }}>
-            No voice notes yet
-          </Text>
+          <View style={styles.emptyContainer}>
+            <Ionicons name="mic-off-outline" size={60} color="#cbd5e1" />
+            <Text style={styles.emptyText}>No recordings found</Text>
+          </View>
         }
       />
     </View>
   );
 }
 
-/* ---------------- STYLES ---------------- */
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: "#f4f6fb" },
-  backButton: { marginBottom: 12 },
-  backButtonText: { color: "#4f46e5", fontSize: 16 },
-  title: {
-    fontSize: 26,
-    fontWeight: "bold",
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  search: {
-    backgroundColor: "#fff",
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 12,
-  },
-  card: {
-    backgroundColor: "#fff",
-    padding: 14,
-    borderRadius: 14,
-    marginBottom: 12,
-  },
-  row: {
+  container: { flex: 1, backgroundColor: "#f8fafc" },
+  header: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginTop: 60,
+    marginBottom: 20,
   },
-  name: { fontSize: 16, fontWeight: "700" },
-  meta: { fontSize: 12, color: "#666", marginBottom: 6 },
-  playButton: {
-    backgroundColor: "#4f46e5",
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  backBtn: {
+    width: 40,
+    height: 40,
+    backgroundColor: "#fff",
+    borderRadius: 12,
     justifyContent: "center",
     alignItems: "center",
-    marginLeft: 12,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
   },
-  playButtonText: { color: "#fff", fontSize: 20 },
-  scrubTooltip: {
+  screenTitle: { fontSize: 20, fontWeight: "800", color: "#1e293b" },
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    marginHorizontal: 20,
+    paddingHorizontal: 15,
+    borderRadius: 15,
+    height: 50,
+    marginBottom: 20,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+  },
+  searchIcon: { marginRight: 10 },
+  searchInput: { flex: 1, fontSize: 16, color: "#1e293b", fontWeight: "500" },
+  listContent: { paddingHorizontal: 20, paddingBottom: 100 },
+  card: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 15,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  cardInfo: { flex: 1 },
+  noteName: { fontSize: 16, fontWeight: "700", color: "#1e293b" },
+  noteMeta: { fontSize: 12, color: "#94a3b8", marginTop: 2 },
+  cardBody: { flexDirection: "row", alignItems: "center", gap: 12 },
+  progressBarContainer: { flex: 1, height: 20, justifyContent: "center" },
+  progressBarBackground: {
+    height: 6,
+    backgroundColor: "#f1f5f9",
+    borderRadius: 3,
+    width: "100%",
+  },
+  progressBarFill: {
+    height: 6,
+    backgroundColor: "#4f46e5",
+    borderRadius: 3,
     position: "absolute",
-    top: -30,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+  },
+  progressBarHandle: {
+    position: "absolute",
+    width: 12,
+    height: 12,
     borderRadius: 6,
-    backgroundColor: "rgba(0,0,0,0.8)",
-    transform: [{ translateX: -30 }],
-    minWidth: 48,
+    backgroundColor: "#4f46e5",
+    borderWidth: 2,
+    borderColor: "#fff",
+    transform: [{ translateX: -6 }],
+  },
+  smallPlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#f5f3ff",
+    justifyContent: "center",
     alignItems: "center",
   },
-  scrubTooltipText: { color: "#fff", fontSize: 12, fontWeight: "600" },
-
-  /* 🎚 Progress Bar */
-  progressBar: {
-    height: 6,
-    backgroundColor: "#e5e7eb",
-    borderRadius: 6,
-    marginTop: 6,
-    position: "relative",
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: "#4f46e5",
-    borderRadius: 6,
-  },
-  scrubber: {
-    position: "absolute",
-    top: -5,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: "#fff",
-    borderWidth: 2,
-    borderColor: "#4f46e5",
-    transform: [{ translateX: -7 }],
+  playingButton: { backgroundColor: "#4f46e5" },
+  emptyContainer: { alignItems: "center", marginTop: 100 },
+  emptyText: {
+    marginTop: 15,
+    color: "#94a3b8",
+    fontSize: 16,
+    fontWeight: "600",
   },
 });
