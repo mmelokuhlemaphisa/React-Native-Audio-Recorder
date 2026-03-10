@@ -56,13 +56,4 @@ npm  start
 - `app/list.tsx` — Notes list, playback controls and scrub UI
 - `app/note/audioDetails.tsx` — Per-note detail (playback, rename, delete, speed)
 
----
-
-
-## ⚠️ Known quirks
-
-- Expo Go on some Android devices may have differences in temporary file handling; if a recorded file is missing, check the app logs.
-- If playback fails, try restarting the app and verifying file existence in the app document directory.
-
----
 
